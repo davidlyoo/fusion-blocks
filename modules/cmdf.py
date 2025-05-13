@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class CMDF(nn.Module):
-    def __init__(self, in_channels, kernel_size=3, r=4):
+    def __init__(self, in_channels, kernel_size=3, channel_reduction=4):
         super(CMDF, self).__init__()
         c_half = in_channels // 2
         k_square = kernel_size * kernel_size
@@ -20,9 +20,9 @@ class CMDF(nn.Module):
         # Channel-wise kernel
         self.channel_kernel = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(in_channels, in_channels // r, kernel_size=1),
+            nn.Conv2d(in_channels, in_channels // channel_reduction, kernel_size=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels // r, in_channels * k_square // 2, kernel_size=1),
+            nn.Conv2d(in_channels // channel_reduction, in_channels * k_square // 2, kernel_size=1),
         )
         
         self.out_proj = nn.Conv2d(in_channels, c_half, kernel_size=1)

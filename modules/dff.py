@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class DFFModule(nn.Module):
-    def __init__(self, in_channels, r=4):
+    def __init__(self, in_channels, channel_reduction=4):
         super(DFFModule, self).__init__()
         
         self.conv_gx = nn.Conv2d(in_channels, 1, kernel_size=1)

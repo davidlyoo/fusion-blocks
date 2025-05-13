@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
 
+
 class CSCA(nn.Module):
     def __init__(self, in_channels):
-        super(CSCA, self).__init__()
+        super().__init__()
         self.dummy = nn.Identity()
     
     def forward(self, x1, x2):
@@ -12,7 +13,7 @@ class CSCA(nn.Module):
 
 class CMDF(nn.Module):
     def __init__(self, in_channels):
-        super(CMDF, self).__init__()
+        super().__init__()
         self.dummy = nn.Identity()
 
     def forward(self, x1, x2):
@@ -20,16 +21,21 @@ class CMDF(nn.Module):
 
 
 class DDCIModule(nn.Module):
-    def __init__(self, channels):
-        super(DDCIModule, self).__init__()
-        self.input_proj_x = nn.Conv2d(channels, channels, kernel_size=1)
-        self.input_proj_y = nn.Conv2d(channels, channels, kernel_size=1)
+    def __init__(self, in_channels, num_heads, spatial_reduction, channel_reduction):
+        super().__init__()
+        self.input_proj_x = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.input_proj_y = nn.Conv2d(in_channels, in_channels, kernel_size=1)
         
-        self.csca = CSCA(in_channels=channels)
-        self.cmdf = CMDF(in_channels=channels)
+        self.csca = CSCA(
+            in_channels=in_channels,
+            num_heads=num_heads,
+            spatial_reduction=spatial_reduction,
+            channel_reduction=channel_reduction
+            )
+        self.cmdf = CMDF(in_channels=in_channels, channel_reduction=channel_reduction)
         
-        self.output_proj_x = nn.Conv2d(channels, channels, kernel_size=1)
-        self.output_proj_y = nn.Conv2d(channels, channels, kernel_size=1)
+        self.output_proj_x = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.output_proj_y = nn.Conv2d(in_channels, in_channels, kernel_size=1)
     
     def forward(self, x, y):
         # Input projection

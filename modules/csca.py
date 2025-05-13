@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 class MSSR(nn.Module):
     def __init__(self, in_channels, r=4): # r: spatial reduction factor - paper X
-        super(MSSR, self).__init__()
+        super().__init__()
         reduced_channels = in_channels // 8
         
         # 4-branch depth-wise separable convolution blocks
@@ -52,9 +52,13 @@ class MSSR(nn.Module):
 
 
 class CSCA(nn.Module):
-    def __init__(self, in_channels, r=4):
-        super(CSCA, self).__init__()
-        self.mssr = MSSR(in_channels, stride=r)
+    def __init__(self, in_channels, num_heads=4, spatial_reduction=16, channel_reduction=4):
+        super().__init__()
+        assert (in_channels // 2) % num_heads == 0, "in_channels must be divisible by 2 * num_heads"
+        
+        self.num_heads = num_heads
+        self.head_dim = (in_channels // 2) // self.num_heads
+        self.mssr = MSSR(in_channels, stride=spatial_reduction)
         
         # Q, K, V projection
         self.q_proj = nn.Conv2d(in_channels // 2, in_channels // 2, kernel_size=1)
@@ -65,8 +69,8 @@ class CSCA(nn.Module):
         
         # Channel-gated FFN
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.gate_fc1 = nn.Conv2d(in_channels, in_channels // r, kernel_size=1)
-        self.gate_fc2 = nn.Conv2d(in_channels // r, in_channels // 2, kernel_size=1)
+        self.gate_fc1 = nn.Conv2d(in_channels, in_channels // channel_reduction, kernel_size=1)
+        self.gate_fc2 = nn.Conv2d(in_channels // channel_reduction, in_channels // 2, kernel_size=1)
         
         # Output projection
         self.linear1 = nn.Conv2d(in_channels // 2, in_channels, kernel_size=1)
@@ -75,26 +79,37 @@ class CSCA(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.sigmoid = nn.Sigmoid()
     
+    def _multihead_attn(self, Q, K, V, B, C_half, H, W):
+        HW = H * W
+        
+        Q = Q.view(B, self.num_heads, self.head_dim, HW).permute(0, 1, 3, 2)  # [B, num_heads, HW, d]
+        K = K.view(B, self.num_heads, self.head_dim, HW).permute(0, 1, 3, 2)
+        V = V.view(B, self.num_heads, self.head_dim, HW).permute(0, 1, 3, 2)
+            
+        attn = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim ** 0.5)
+        attn = torch.softmax(attn, dim=-1)
+        out = torch.matmul(attn, V)  # [B, num_heads, HW, d]
+        
+        out = out.permute(0, 2, 1, 3).reshape(B, HW, C_half).permute(0, 2, 1).view(B, C_half, H, W)
+        return out
+    
     def forward(self, x1, y1):
         B, C_half, H, W = x1.shape
+        C = C_half * 2
         
         # Forward 1: Q=y1, KV=x1
-        Q1 = self.q_proj(y1).view(B, C_half, -1).permute(0, 2, 1)
-        kv1 = self.kv_proj(self.mssr(x1)).view(B, C_half * 2, -1).permute(0, 2, 1)
-        K1, V1 = kv1.chunk(2, dim=2)
-    
-        attn1 = torch.softmax(torch.matmul(Q1, K1.transpose(-2, -1)) / (C_half ** 0.5), dim=-1)
-        attn_out1 = torch.matmul(attn1, V1).permute(0, 2, 1).view(B, C_half, H, W)
-        x1_sca = self.attn_proj(attn_out1)
+        Q1 = self.q_proj(y1).view(B, C_half, -1)
+        KV1 = self.kv_proj(self.mssr(x1)).view(B, C, -1)
+        K1, V1 = KV1.chunk(2, dim=1)
+        x1_sca = self.attn_proj(self._multihead_attn(Q1, K1, V1, B, C_half, H, W))
+        x1_sca = x1_sca + x1
         
         # Forward 2: Q=x1, KV=y1
-        Q2 = self.q_proj(x1).view(B, C_half, -1).permute(0, 2, 1)
-        kv2 = self.kv_proj(self.mssr(y1)).view(B, C_half * 2, -1).permute(0, 2, 1)
-        K2, V2 = kv2.chunk(2, dim=2)
-
-        attn2 = torch.softmax(torch.matmul(Q2, K2.transpose(-2, -1)) / (C_half ** 0.5), dim=-1)
-        attn_out2 = torch.matmul(attn2, V2).permute(0, 2, 1).view(B, C_half, H, W)
-        y1_sca = self.attn_proj(attn_out2)
+        Q2 = self.q_proj(x1).view(B, C_half, -1)
+        KV2 = self.kv_proj(self.mssr(y1)).view(B, C, -1)
+        K2, V2 = KV2.chunk(2, dim=1)
+        y1_sca = self.attn_proj(self._multihead_attn(Q2, K2, V2, B, C_half, H, W))
+        y1_sca = y1_sca + y1
         
         # Channel-Gated FFN
         z_x = torch.cat([x1_sca, y1], dim=1)
